@@ -7,6 +7,11 @@
 const { chromium } = require('playwright-core');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// 配置（可用环境变量覆盖；默认本地 Edge CDP + 微信公众平台域名）
+// ⚠️ 公众号 token 不在此处、也不写死：运行时从已登录页面动态提取（见 getToken）
+const CDP_URL = process.env.CDP_URL || 'http://127.0.0.1:9222';
+const OA_HOST = process.env.OA_HOST || 'mp.weixin.qq.com';
+
 const DOCX = process.argv[2] || 'article.docx';
 const TITLE = process.argv[3] || '未命名文章';
 
@@ -22,17 +27,17 @@ async function getToken(page) {
 }
 
 (async () => {
-  const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const browser = await chromium.connectOverCDP(CDP_URL);
   let page = null;
   for (const ctx of browser.contexts())
     for (const p of ctx.pages())
-      if (p.url().includes('mp.weixin.qq.com')) page = p;
+      if (p.url().includes(OA_HOST)) page = p;
   if (!page) throw new Error('未找到公众号后台页面，请先在 Edge 打开 mp.weixin.qq.com 并登录');
 
   // 1) 进入草稿箱列表（type=77 = 草稿）
   if (!page.url().includes('type=77')) {
     const token = await getToken(page);
-    const url = 'https://mp.weixin.qq.com/cgi-bin/appmsg?begin=0&count=10&type=77&action=list_card'
+    const url = `https://${OA_HOST}/cgi-bin/appmsg?begin=0&count=10&type=77&action=list_card`
       + (token ? `&token=${token}` : '') + '&lang=zh_CN';
     await page.goto(url, { waitUntil: 'networkidle' });
     await sleep(3000);

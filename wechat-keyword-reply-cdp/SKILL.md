@@ -27,6 +27,16 @@ Playwright connectOverCDP() 连接 127.0.0.1:9222
 互动管理 → 自动回复 → 关键词回复 → 添加 → 填规则名/关键词/匹配方式 → 添加回复 → 保存
 ```
 
+## 配置（可选环境变量）
+
+脚本**不写死任何账号凭据**；公众号 token 在运行时从已登录页面动态读取。
+以下两个值可用环境变量覆盖（默认值即开箱可用，一般无需改）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CDP_URL` | `http://127.0.0.1:9222` | Edge CDP 调试地址 |
+| `OA_HOST` | `mp.weixin.qq.com` | 微信公众平台域名（换自建/测试域名时改） |
+
 ## 前置条件
 
 1. 用户 Edge 已登录公众号后台（会话未过期；过期需扫码）
@@ -60,6 +70,11 @@ setup_keyword.js "规则名" "关键词" "news" "文章标题1,文章标题2"
 const { chromium } = require('playwright-core');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// 配置（可用环境变量覆盖；默认本地 Edge CDP + 微信公众平台域名）
+// ⚠️ 公众号 token 不在此处、也不写死：运行时从已登录页面动态读取
+const CDP_URL = process.env.CDP_URL || 'http://127.0.0.1:9222';
+const OA_HOST = process.env.OA_HOST || 'mp.weixin.qq.com';
+
 const RULE = process.argv[2] || '规则';
 const KEYWORD = process.argv[3] || '关键词';
 const TYPE = (process.argv[4] || 'text').toLowerCase(); // text | news
@@ -75,11 +90,11 @@ async function closeAccountDialog(page) {
 }
 
 (async () => {
-  const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const browser = await chromium.connectOverCDP(CDP_URL);
   let page = null;
   for (const ctx of browser.contexts())
     for (const p of ctx.pages())
-      if (p.url().includes('mp.weixin.qq.com')) page = p;
+      if (p.url().includes(OA_HOST)) page = p;
   if (!page) throw new Error('未找到公众号后台页面，请先登录');
 
   // 1) 导航：互动管理 → 自动回复 → 关键词回复

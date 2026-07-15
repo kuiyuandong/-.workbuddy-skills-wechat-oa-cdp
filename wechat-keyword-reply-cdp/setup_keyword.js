@@ -6,6 +6,11 @@
 const { chromium } = require('playwright-core');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// 配置（可用环境变量覆盖；默认本地 Edge CDP + 微信公众平台域名）
+// ⚠️ 公众号 token 不在此处、也不写死：运行时从已登录页面动态读取
+const CDP_URL = process.env.CDP_URL || 'http://127.0.0.1:9222';
+const OA_HOST = process.env.OA_HOST || 'mp.weixin.qq.com';
+
 const RULE = process.argv[2] || '规则';
 const KEYWORD = process.argv[3] || '关键词';
 const TYPE = (process.argv[4] || 'text').toLowerCase(); // text | news
@@ -21,11 +26,11 @@ async function closeAccountDialog(page) {
 }
 
 (async () => {
-  const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const browser = await chromium.connectOverCDP(CDP_URL);
   let page = null;
   for (const ctx of browser.contexts())
     for (const p of ctx.pages())
-      if (p.url().includes('mp.weixin.qq.com')) page = p;
+      if (p.url().includes(OA_HOST)) page = p;
   if (!page) throw new Error('未找到公众号后台页面，请先登录');
 
   // 1) 导航：互动管理 -> 自动回复 -> 关键词回复
