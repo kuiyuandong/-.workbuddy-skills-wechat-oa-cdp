@@ -2,7 +2,7 @@
 name: wechat-published-history-cdp
 description: >
   通过 Edge 浏览器 CDP 远程调试协议 + Playwright，直连微信公众号后台「发表记录」页，
-  抓取「已发表文章目录」（标题 / 日期 / 阅读 / 赞 / 评论 / 分享），支持翻页拉全部、关键词筛选。
+  抓取「已发表文章目录」（标题 / 日期 / 真实对外链接 / 阅读 / 赞 / 评论 / 分享），支持翻页拉全部、关键词筛选。
   适用于：未认证订阅号没有 API 时，快速盘点历史内容、为新文章找可链接的历史稿以提升用户粘性。
   触发场景：用户说"查一下已发表文章""拉历史发布目录""我发过哪些文章""查大纲相关历史稿""盘点公众号内容"时使用此 skill。
 location: user
@@ -15,7 +15,7 @@ agent_created: true
 
 写新文章时经常需要**链接历史文章**来提升用户粘性，但公众号后台没有"导出全部已发表目录"的按钮，
 人工翻页又慢又容易漏。本方案复用你**已登录的 Edge 后台会话**，通过 CDP 让 Playwright 接管浏览器，
-直接打开「发表记录」页，把目录抓成一份干净的清单（含阅读/赞/评论/分享数据），可全文检索。
+直接打开「发表记录」页，把目录抓成一份干净的清单（含标题/日期/真实对外链接/阅读/赞/评论/分享数据），可全文检索、可直接拿链接去站外分享或站内互推。
 
 ## 核心原理
 
@@ -23,8 +23,8 @@ agent_created: true
 用户 Edge（已登录 mp.weixin.qq.com，调试模式启动）
     ↓ connectOverCDP(127.0.0.1:9222)
 Playwright 打开 发表记录页（appmsgpublish?sub=list，begin 翻页）
-    ↓ 读 document.body.innerText（避开易崩的 screenshot）
-解析成结构化目录 → 存 published_catalog.txt / .md
+    ↓ DOM 提取标题+链接+数据 + innerText 补日期（避开易崩的 screenshot）
+解析成结构化目录（含 url）→ 存 published_catalog.txt / .md / .json
 ```
 
 ## ⚠️ 最关键的一个坑（踩了 5 轮才确认）
@@ -79,9 +79,9 @@ query_published.js "" 2
 所以这份目录里**精确的标题文本**就是你要搜的词。例如新文章想挂"大纲变化"相关旧文，先 `query_published.js 大纲`
 拿到准确标题，再在编辑器里搜那个标题插入即可。
 
-（若日后需要原始文章链接 `mp.weixin.qq.com/s?...`，可在脚本 `page.evaluate` 里额外抓取 `a[href*="/s?"]` 的 href，本 v1 未默认抓取。）
+**v2 起已默认抓取真实对外链接**：每篇文章的 `https://mp.weixin.qq.com/s/XXX` 会输出在 `published_catalog.txt` 行尾、`.md` 表格「链接」列、以及 `published_catalog.json` 的 `url` 字段。站内互推（编辑器搜标题插卡片）和站外分享（甩链接到群/小红书）都能直接用。
 
-## 脚本模板（query_published.js）
+## 脚本模板（query_published.js，v2 已含链接）
 
 ```javascript
 const { chromium } = require('playwright-core');
@@ -95,49 +95,55 @@ const FILTER = process.argv[2] || '';
 const MAX_PAGES = parseInt(process.argv[3] || '20', 10);
 const COUNT = 20;
 
-const killer = setTimeout(() => process.exit(2), 180000);
-
-function parseCatalog(text) {
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length);
-  const arts = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!/^(今天|昨天|星期|20\d{2}年)/.test(line)) continue;
-    const date = line;
-    let j = i + 1;
-    if (j >= lines.length || lines[j] !== '已发表') continue;
-    let k = j + 1;
-    if (k >= lines.length) continue;
-    let title = lines[k];
-    let m = k + 1;
-    if (title === '原创') { title = lines[m]; m = m + 1; }
-    if (!title || /^\d+$/.test(title)) continue;
-    const metrics = [];
-    while (m < lines.length && /^\d+$/.test(lines[m])) { metrics.push(parseInt(lines[m], 10)); m++; }
-    arts.push({ date, title, views: metrics[0] || 0, likes: metrics[1] || 0, comments: metrics[2] || 0, shares: metrics[3] || 0 });
-    i = m - 1;
-  }
-  return arts;
+// 从 DOM 提取每篇已发文章的 标题 + 真实对外链接 + 数据；日期用整页 innerText 补（卡片 DOM 不含日期文本）
+async function fetchPageCards(page, begin, token) {
+  const url = `https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&begin=${begin}&count=${COUNT}&token=${token}&lang=zh_CN`;
+  await page.goto('about:blank'); // 清空 SPA，确保 begin 翻页生效
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await sleep(13000); // 微信长轮询，等足 13 秒
+  return page.evaluate(() => {
+    const out = [];
+    document.querySelectorAll('.weui-desktop-mass-appmsg').forEach(card => {
+      const a = card.querySelector('a[href*="mp.weixin.qq.com/s/"]');
+      if (!a) return;
+      const span = a.querySelector('span');
+      const title = (span ? span.textContent : a.textContent).trim();
+      if (!title) return;
+      const url = a.getAttribute('href');
+      const nums = Array.from(card.querySelectorAll('[class*="data__inner"]')).map(n => parseInt((n.textContent || '').trim(), 10) || 0);
+      out.push({ title, url, views: nums[0] || 0, likes: nums[1] || 0, comments: nums[2] || 0, shares: nums[3] || 0 });
+    });
+    // 日期：整页 innerText 按「已发表」锚点解析 标题→日期
+    const lines = (document.body.innerText || '').split('\n').map(l => l.trim()).filter(l => l.length);
+    const isDate = s => /^(今天|昨天|星期|20\d{2}年|\d{1,2}月\d{1,2}日)/.test(s);
+    const dateMap = {};
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] !== '已发表') continue;
+      let date = '';
+      for (let j = i - 1; j >= 0 && j >= i - 6; j--) { if (isDate(lines[j])) { date = lines[j]; break; } }
+      if (!date) continue;
+      let k = i + 1; if (lines[k] === '原创') k = i + 2;
+      let title = '';
+      if (lines[k] && !/^\d+$/.test(lines[k]) && lines[k] !== '已发表') title = lines[k];
+      else if (lines[i - 1] && !isDate(lines[i - 1]) && lines[i - 1] !== '已发表') title = lines[i - 1];
+      if (title) dateMap[title] = date;
+    }
+    return out.map(o => ({ ...o, date: dateMap[o.title] || '' }));
+  });
 }
 
 (async () => {
   const browser = await chromium.connectOverCDP(CDP_URL);
   const context = browser.contexts()[0];
-  const pages = context.pages();
-  let page = pages.find(p => p.url().includes('mp.weixin.qq.com')) || await context.newPage();
   let token = '';
-  const mt = page.url().match(/token=(\d+)/);
-  if (mt) token = mt[1];
-  if (!token) { console.error('NO TOKEN - 请先在 Edge 打开 mp.weixin.qq.com 并登录'); clearTimeout(killer); process.exit(0); }
+  for (const p of context.pages()) { const m = (p.url() || '').match(/token=(\d+)/); if (m) { token = m[1]; break; } }
+  if (!token) { console.error('NO TOKEN - 请先在 Edge 打开 mp.weixin.qq.com 并登录'); process.exit(0); }
+  const page = await context.newPage(); // 全新 tab，避免 SPA 状态错位
 
   const all = [];
   let begin = 0, pagesFetched = 0, lastFirstTitle = '';
   while (pagesFetched < MAX_PAGES) {
-    const url = `https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&begin=${begin}&count=${COUNT}&token=${token}&lang=zh_CN`;
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    await sleep(12000);
-    const text = await page.evaluate(() => document.body ? document.body.innerText : '');
-    const batch = parseCatalog(text);
+    const batch = await fetchPageCards(page, begin, token);
     if (batch.length === 0) break;
     if (batch[0].title === lastFirstTitle) break; // 翻页去重
     lastFirstTitle = batch[0].title;
@@ -147,13 +153,13 @@ function parseCatalog(text) {
     begin += COUNT;
   }
   const shown = FILTER ? all.filter(a => a.title.includes(FILTER)) : all;
-  const lines = shown.map((a, i) => `${i + 1}. [${a.date}] ${a.title}  (阅读 ${a.views} / 赞 ${a.likes} / 评论 ${a.comments} / 分享 ${a.shares})`);
+  const lines = shown.map((a, i) =>
+    `${i + 1}. [${a.date}] ${a.title}  (阅读 ${a.views} / 赞 ${a.likes} / 评论 ${a.comments} / 分享 ${a.shares})  ${a.url}`);
   fs.writeFileSync(path.join(OUT_DIR, 'published_catalog.txt'), lines.join('\n') + '\n');
-  console.log('TOTAL_FETCHED=' + all.length + (FILTER ? `  FILTER_MATCH=${shown.length}` : ''));
+  fs.writeFileSync(path.join(OUT_DIR, 'published_catalog.json'), JSON.stringify(shown, null, 2));
+  console.log('TOTAL=' + all.length + (FILTER ? `  FILTER_MATCH=${shown.length}` : ''));
   console.log(lines.join('\n'));
-  clearTimeout(killer);
-  process.exit(0);
-})().catch(e => { console.error('❌', e.message); clearTimeout(killer); process.exit(1); });
+})().catch(e => { console.error('❌', e.message); process.exit(1); });
 ```
 
 ## ⚠️ 关键踩坑备忘
