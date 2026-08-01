@@ -4,12 +4,13 @@ WorkBuddy 技能集：通过 **Edge 浏览器 CDP（远程调试协议）+ Playw
 
 适用于：**未认证订阅号**（没有 API 群发/发布权限）时，借用已登录的浏览器会话完成发布动作。
 
-## 包含两个技能
+## 包含三个技能
 
 | 技能 | 目录 | 用途 |
 |------|------|------|
 | 草稿箱发布 | [`wechat-draft-publish-cdp/`](./wechat-draft-publish-cdp) | 把本地 `.docx/.doc/.txt/.md` 文章自动导入公众号草稿箱（新版编辑器走「文档导入」） |
 | 关键词自动回复 | [`wechat-keyword-reply-cdp/`](./wechat-keyword-reply-cdp) | 在公众号后台批量配置关键词规则 |
+| 已发表目录查询 | [`wechat-published-history-cdp/`](./wechat-published-history-cdp) | 直连后台「发表记录」抓取已发表文章目录（标题/日期/阅读/赞/评论/分享），支持翻页+关键词筛选，用于为新文章找可链接的历史稿 |
 
 ## 前置条件
 
